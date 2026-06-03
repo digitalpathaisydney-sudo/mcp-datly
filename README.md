@@ -17,16 +17,20 @@ to a WebSocket and refetches whenever the MCP makes a change.
 
 ## Install
 
+Install the `datly-mcp` command on the machine where your assistant runs. We
+recommend [pipx](https://pipx.pypa.io) (installs it isolated, on your PATH):
+
 ```bash
-# editable install from this repo (until published to PyPI):
-pip install -e .
-# provides the `datly-mcp` console script
+pipx install git+https://github.com/digitalpathaisydney-sudo/mcp-datly.git
+# once it's on PyPI:  pipx install datly-mcp
 ```
+
+(For local development of this package: `pip install -e .` from a checkout.)
 
 ## Connect it
 
 1. In Datly, open **`/account/mcp-tokens`** → **Generate token** → copy the
-   `.mcp.json` snippet (the launch token is shown once and expires in ~60s).
+   `.mcp.json` snippet (the launch token is shown once and is short-lived).
 2. Paste it into your MCP config (e.g. `~/.claude.json` or a project `.mcp.json`):
 
    ```json
@@ -36,7 +40,7 @@ pip install -e .
          "command": "datly-mcp",
          "env": {
            "DATLY_MCP_LAUNCH_TOKEN": "lt_…",
-           "DATLY_API_URL": "http://localhost:8005/api"
+           "DATLY_API_URL": "https://datly.tech/api"
          }
        }
      }
@@ -58,7 +62,7 @@ pip install -e .
 
 | Var | Required | Purpose |
 |---|---|---|
-| `DATLY_API_URL` | yes | Datly Django REST root (e.g. `http://localhost:8005/api`) |
+| `DATLY_API_URL` | yes | Datly Django REST root (e.g. `https://datly.tech/api`) |
 | `DATLY_MCP_LAUNCH_TOKEN` | first run only | single-use bootstrap token from the tokens page |
 | `DATLY_MCP_LOG_LEVEL` | no | log level to stderr (default `INFO`) |
 
