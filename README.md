@@ -1,5 +1,9 @@
 # datly-mcp
 
+![Python](https://img.shields.io/badge/python-3.10%2B-blue)
+![License](https://img.shields.io/badge/license-MIT-green)
+![MCP](https://img.shields.io/badge/MCP-server-7B3FE4)
+
 An [MCP](https://modelcontextprotocol.io) server that lets an AI assistant
 (e.g. Claude Code) **read and edit your Datly database diagrams while you watch
 the changes appear live** in the open editor tab.
@@ -85,3 +89,19 @@ apply this DBML: Table posts { id integer [pk] author_id integer [ref: > users.i
 set active area Billing          → scope narrows to that area
 add a table subscriptions        → lands in Billing, FK shadows resolve
 ```
+
+## How it works
+
+```
+Claude Code ──stdio──> datly-mcp ──HTTP(DATLY_API_URL)──> Datly Django
+                                                              │ broadcast
+                                          editor tab <──WebSocket──┘ (live refetch)
+```
+
+The MCP holds its own access/refresh pair (independent of the web session) and
+stamps every write with `X-Initiated-By: mcp`, so the editor tab knows the
+change came from the assistant and refetches in under a second.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
