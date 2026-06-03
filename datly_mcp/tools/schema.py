@@ -21,6 +21,7 @@ from ..server import mcp
 from ..state import MCPSession
 from ..errors import MCPError
 from .read import _run, _require_active_diagram, _as_list
+from ._guards import guard_table_in_scope
 
 
 # ── Type mapping (mirror of diagrams/dbml_apply._map_type) ───────────────
@@ -138,6 +139,7 @@ def update_table(table_id: str, fields: dict) -> dict:
     color, comments, is_view."""
     def _impl(session: MCPSession) -> dict:
         did = _require_active_diagram(session)
+        guard_table_in_scope(session, did, table_id)
         updated = session.client.request(
             "PATCH", f"/diagrams/{did}/tables/{table_id}/", json=fields)
         return {"updated_table": {"id": updated["id"], "name": updated["name"]}}
@@ -149,13 +151,14 @@ def delete_table(table_id: str) -> dict:
     """Delete a table (cascades to its fields, indexes, and relationships)."""
     def _impl(session: MCPSession) -> dict:
         did = _require_active_diagram(session)
+        guard_table_in_scope(session, did, table_id)
         session.client.request(
             "DELETE", f"/diagrams/{did}/tables/{table_id}/")
         return {"deleted_table_id": table_id}
     return _run(_impl)
 
 
-# ── Fields ───────────────────────────────────────────
+# ── Fields ─────────────────────────────────────────
 
 @mcp.tool()
 def add_field(table_id: str, name: str, type: str, opts: Optional[dict] = None) -> dict:
@@ -166,6 +169,7 @@ def add_field(table_id: str, name: str, type: str, opts: Optional[dict] = None) 
 
     def _impl(session: MCPSession) -> dict:
         did = _require_active_diagram(session)
+        guard_table_in_scope(session, did, table_id)
         mapped = _map_type(type)
         body: dict[str, Any] = {
             "name": name,
@@ -193,6 +197,7 @@ def update_field(field_id: str, fields: dict) -> dict:
     def _impl(session: MCPSession) -> dict:
         did = _require_active_diagram(session)
         table_id = _resolve_table_for_field(session, did, field_id)
+        guard_table_in_scope(session, did, table_id)
         body = dict(fields)
         if "type" in body:
             mapped = _map_type(body.pop("type"))
@@ -214,6 +219,7 @@ def delete_field(field_id: str) -> dict:
     def _impl(session: MCPSession) -> dict:
         did = _require_active_diagram(session)
         table_id = _resolve_table_for_field(session, did, field_id)
+        guard_table_in_scope(session, did, table_id)
         session.client.request(
             "DELETE", f"/diagrams/{did}/tables/{table_id}/fields/{field_id}/")
         return {"deleted_field_id": field_id}
@@ -232,6 +238,9 @@ def add_relationship(source_table_id: str, source_field_id: str,
     ``"many"`` (default many→one, i.e. a standard FK)."""
     def _impl(session: MCPSession) -> dict:
         did = _require_active_diagram(session)
+        # The FK lives on the source table; it must be in scope. The target may
+        # be an out-of-scope shadow (that's the whole point of FK shadows).
+        guard_table_in_scope(session, did, source_table_id)
         body = {
             "name": name or f"fk_{source_field_id[:8]}",
             "source_table": source_table_id,

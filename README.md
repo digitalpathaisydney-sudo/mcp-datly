@@ -11,8 +11,9 @@ the changes appear live** in the open editor tab.
 It talks only to your Datly Django backend over HTTP; the editor tab subscribes
 to a WebSocket and refetches whenever the MCP makes a change.
 
-> **Status:** Milestone 3 — read + session tools, coarse mutations (apply DBML /
-> SQL DDL), the 8 fine schema tools, and area-focus with FK shadows. 19 tools.
+> **Status:** Milestone 4 — read + session tools, coarse mutations (apply DBML /
+> SQL DDL), the 8 fine schema tools, 3 visual tools, and area-focus with FK
+> shadows + an out-of-scope write guard. 22 tools.
 
 ## Install
 
@@ -49,7 +50,9 @@ pip install -e .
 
    If the launch token expires before first boot, run
    `./bootstrap-creds.sh <launch_token>` right after minting — it redeems the
-   token into the credentials cache so the next start is race-free.
+   token into the credentials cache so the next start is race-free. A running
+   server also self-heals: if its refresh fails it re-reads the cache, so
+   re-running `bootstrap-creds.sh` recovers it without a restart.
 
 ### Environment
 
@@ -62,7 +65,7 @@ pip install -e .
 The MCP's only network dependency is `DATLY_API_URL` — token refresh is proxied
 through Datly, so the MCP never needs the Auth Hub URL.
 
-## Tools
+## Tools (22)
 
 **Read + session (9):** `list_my_diagrams`, `set_active_diagram`,
 `get_active_diagram_id`, `create_diagram`, `get_diagram`, `list_areas`,
@@ -75,10 +78,13 @@ blob (non-destructive: never deletes objects absent from the input).
 **Fine schema (8):** `add_table`, `update_table`, `delete_table`, `add_field`,
 `update_field`, `delete_field`, `add_relationship`, `delete_relationship`.
 
+**Visual (3):** `add_area`, `assign_table_to_area`, `add_note`.
+
 Every tool response carries a `_context` footer (`active_diagram`,
 `active_area`, `scope`) so the assistant always knows its scope. While an area
 is active, `get_diagram` returns only that area's tables plus read-only FK
-shadows of out-of-scope tables they reference.
+shadows of out-of-scope tables they reference, and any edit to an out-of-scope
+table is rejected with `OUT_OF_SCOPE` (switch areas or `clear_active_area()`).
 
 ## Example session
 

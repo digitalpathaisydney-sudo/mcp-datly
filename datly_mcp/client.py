@@ -86,10 +86,17 @@ class DatlyClient:
             raise errors.from_transport_error(exc, url)
 
         if not response.is_success:
+            # Our refresh token aged out. If another process (e.g.
+            # bootstrap-creds.sh after re-minting) wrote fresh credentials to
+            # disk since we loaded ours, adopt them so a long-running server
+            # self-heals without a restart. Only give up if the cache is stale.
+            if self._reload_creds_if_changed():
+                return
             raise errors.MCPError(
                 "AUTH_EXPIRED",
                 "Could not refresh your MCP session — it was likely revoked.",
-                hint="Mint a new token at /account/mcp-tokens.",
+                hint="Mint a new token at /account/mcp-tokens (or run "
+                "bootstrap-creds.sh with a fresh launch token).",
                 retryable=False,
             )
 
@@ -97,3 +104,21 @@ class DatlyClient:
         self.creds.access_token = data["access"]
         self.creds.refresh_token = data.get("refresh", self.creds.refresh_token)
         self.creds.save()
+
+    def _reload_creds_if_changed(self) -> bool:
+        """Re-read the on-disk credential cache; adopt it if a different access
+        token is present (someone re-bootstrapped). Returns True if adopted."""
+        import json
+        from .credentials import CRED_PATH
+
+        try:
+            data = json.loads(CRED_PATH.read_text())
+        except (OSError, ValueError):
+            return False
+        disk_access = data.get("access_token")
+        if disk_access and disk_access != self.creds.access_token:
+            self.creds.access_token = disk_access
+            self.creds.refresh_token = data.get(
+                "refresh_token", self.creds.refresh_token)
+            return True
+        return False
