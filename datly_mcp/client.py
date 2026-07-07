@@ -1,12 +1,20 @@
-"""HTTP client for the Datly REST API with transparent token refresh.
+"""HTTP clients for the Datly REST API.
 
-One ``DatlyClient`` per MCP process. It stamps every request with
-``X-Initiated-By: mcp`` (so the server's WS broadcast tags the change as AI-
-driven and the user's editor tab knows to refetch) and, on a 401, refreshes
-the access token via Datly's ``/mcp/refresh`` proxy and retries ONCE.
+Two clients live here, picked by ``server.build_session()`` based on env:
 
-The MCP's only network dependency is ``DATLY_API_URL`` — refresh is proxied
-through Datly to the Hub, so the MCP never needs the Hub URL or platform id.
+  • :class:`ApiKeyClient` — the modern path. The user pastes a long-lived
+    ``dlymcp_xxx`` key into ``.mcp.json`` and the laptop just sends it as
+    ``Authorization: Bearer dlymcp_xxx``. Datly's server vault holds the
+    Hub refresh material — no refresh dance, no on-disk credentials cache.
+
+  • :class:`DatlyClient` — legacy path for installs that still use
+    ``~/.datly-mcp/credentials.json`` and the launch_token+refresh dance.
+    Kept for 1-2 releases of back-compat, then can be removed.
+
+Both stamp every request with ``X-Initiated-By: mcp`` (so the server's WS
+broadcast tags the change as AI-driven and the user's editor tab knows to
+refetch). Both implement the same ``.request(method, path, ...)`` surface
+so tools don't care which one they get.
 """
 from __future__ import annotations
 
@@ -16,6 +24,77 @@ import httpx
 
 from . import errors
 from .credentials import Credentials
+
+
+# ─── Modern API key client ───────────────────────────────────────────────
+
+class ApiKeyClient:
+    """Plain bearer-auth HTTP client. No refresh dance, no on-disk state.
+
+    The Datly server validates the ``dlymcp_xxx`` key against its MCPApiKey
+    table on every request and lifts the cached Hub access token from there
+    (refreshing transparently if needed). The laptop just holds the opaque
+    key — same model as a GitHub PAT.
+
+    ``workspace_org_id`` (optional) is injected as ``X-Workspace-Org-ID`` on
+    every request so the server scopes the response to the right workspace.
+    The key itself is already bound to a workspace at mint time; this header
+    is a belt-and-suspenders match check on the server side.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        api_url: str,
+        *,
+        workspace_org_id: Optional[str] = None,
+    ) -> None:
+        self.api_key = api_key
+        self.api_url = api_url.rstrip("/")
+        self.workspace_org_id = workspace_org_id
+        self._http = httpx.Client(timeout=15)
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json: Any = None,
+        params: Optional[dict] = None,
+        headers: Optional[dict] = None,
+    ) -> Any:
+        url = f"{self.api_url}{path}"
+        send_headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "X-Initiated-By": "mcp",
+        }
+        if self.workspace_org_id:
+            send_headers["X-Workspace-Org-ID"] = self.workspace_org_id
+        if headers:
+            send_headers.update(headers)
+
+        try:
+            response = self._http.request(
+                method, url, json=json, params=params, headers=send_headers,
+            )
+        except httpx.RequestError as exc:
+            raise errors.from_transport_error(exc, url)
+
+        if response.is_success:
+            return response.json() if response.content else None
+        if response.status_code == 401:
+            # Server says the key is invalid/revoked — no point retrying.
+            raise errors.MCPError(
+                "AUTH_INVALID",
+                "Datly rejected the MCP API key — it may have been revoked.",
+                hint="Mint a new key at /account/mcp-tokens and paste the "
+                "fresh snippet into your .mcp.json.",
+                retryable=False,
+            )
+        raise errors.from_response(response)
+
+
+# ─── Legacy credentials.json + refresh client ────────────────────────────
 
 
 class DatlyClient:
