@@ -13,7 +13,7 @@ to a WebSocket and refetches whenever the MCP makes a change.
 
 > **Status:** Milestone 4 — read + session tools, coarse mutations (apply DBML /
 > SQL DDL), the 8 fine schema tools, 3 visual tools, and area-focus with FK
-> shadows + an out-of-scope write guard. 22 tools.
+> shadows + an out-of-scope write guard. 24 tools.
 
 ## Install
 
@@ -29,8 +29,9 @@ pipx install git+https://github.com/digitalpathaisydney-sudo/mcp-datly.git
 
 ## Connect it
 
-1. In Datly, open **`/account/mcp-tokens`** → **Generate token** → copy the
-   `.mcp.json` snippet (the launch token is shown once and is short-lived).
+1. In Datly, open **`/account/mcp-tokens`** → **Create API key** → name it
+   (e.g. "Laptop") → copy the `.mcp.json` snippet. The key (`dlymcp_…`) is
+   shown **once**.
 2. Paste it into your MCP config (e.g. `~/.claude.json` or a project `.mcp.json`):
 
    ```json
@@ -39,7 +40,7 @@ pipx install git+https://github.com/digitalpathaisydney-sudo/mcp-datly.git
        "datly": {
          "command": "datly-mcp",
          "env": {
-           "DATLY_MCP_LAUNCH_TOKEN": "lt_…",
+           "DATLY_MCP_API_KEY": "dlymcp_…",
            "DATLY_API_URL": "https://datly.tech/api"
          }
        }
@@ -47,33 +48,53 @@ pipx install git+https://github.com/digitalpathaisydney-sudo/mcp-datly.git
    }
    ```
 
-3. Restart the assistant. On first run the MCP redeems the launch token for its
-   own access+refresh pair and caches it at `~/.datly-mcp/credentials.json`
-   (chmod 600). After that the launch token is no longer needed; the MCP
-   refreshes its own session automatically.
+3. Restart the assistant. That's it — no on-disk credential cache, no refresh
+   dance, no race against a launch-token TTL. The key is long-lived; revoke it
+   from `/account/mcp-tokens` when you're done.
 
-   If the launch token expires before first boot, run
-   `./bootstrap-creds.sh <launch_token>` right after minting — it redeems the
-   token into the credentials cache so the next start is race-free. A running
-   server also self-heals: if its refresh fails it re-reads the cache, so
-   re-running `bootstrap-creds.sh` recovers it without a restart.
+### Workspace scope (optional)
+
+If you want the MCP scoped to an org workspace instead of Personal, pick the
+workspace in the create-key dialog and the generated snippet will include:
+
+```json
+"DATLY_MCP_WORKSPACE_ORG_ID": "7"
+```
+
+The key is bound to that workspace at mint time — every MCP request is filtered
+to diagrams in that workspace (so a "Personal" key can't see org diagrams and
+vice-versa).
 
 ### Environment
 
 | Var | Required | Purpose |
 |---|---|---|
-| `DATLY_API_URL` | yes | Datly Django REST root (e.g. `https://datly.tech/api`) |
-| `DATLY_MCP_LAUNCH_TOKEN` | first run only | single-use bootstrap token from the tokens page |
+| `DATLY_API_URL` | yes | Datly REST root (e.g. `https://datly.tech/api`) |
+| `DATLY_MCP_API_KEY` | yes (modern) | long-lived `dlymcp_…` key from the tokens page |
+| `DATLY_MCP_WORKSPACE_ORG_ID` | no | scope MCP calls to an org workspace |
 | `DATLY_MCP_LOG_LEVEL` | no | log level to stderr (default `INFO`) |
 
-The MCP's only network dependency is `DATLY_API_URL` — token refresh is proxied
-through Datly, so the MCP never needs the Auth Hub URL.
+The MCP's only network dependency is `DATLY_API_URL` — the server holds the
+Hub session, so the MCP never needs the Auth Hub URL.
 
-## Tools (22)
+> **Legacy installs** still using `DATLY_MCP_LAUNCH_TOKEN` +
+> `~/.datly-mcp/credentials.json` keep working for back-compat; the server
+> logs a deprecation warning on each start. Re-mint via the new flow when
+> convenient.
 
-**Read + session (9):** `list_my_diagrams`, `set_active_diagram`,
-`get_active_diagram_id`, `create_diagram`, `get_diagram`, `list_areas`,
-`set_active_area`, `get_active_area`, `clear_active_area`.
+## Tools (24)
+
+**Read + session (11):** `list_my_diagrams`, `set_active_diagram`,
+`get_active_diagram_id`, `create_diagram`, `get_diagram_outline`, `get_table`,
+`get_diagram`, `list_areas`, `set_active_area`, `get_active_area`,
+`clear_active_area`.
+
+Reads are context-budget-aware: `get_diagram` returns a slimmed snapshot (each
+field carries only its non-default modifiers — ~⅓ the size of the raw payload),
+and on a large diagram you should read `get_diagram_outline()` (a tiny
+table-of-contents) first, then pull only the tables you need with
+`get_table(name)`. `get_diagram(verbose=True)` returns the full untrimmed
+payload when you really need geometry/timestamps.
 
 **Coarse mutations (2):** `apply_dbml(dbml_text)`,
 `apply_sql_ddl(sql_text, source_db_type)` — merge/upsert a whole DBML or SQL DDL
