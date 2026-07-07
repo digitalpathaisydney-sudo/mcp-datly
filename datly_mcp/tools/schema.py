@@ -20,11 +20,11 @@ from typing import Any, Optional
 from ..server import mcp
 from ..state import MCPSession
 from ..errors import MCPError
-from .read import _run, _require_active_diagram, _as_list
+from .read import _run, _require_active_diagram, _as_list, _fetch_all
 from ._guards import guard_table_in_scope
 
 
-# ── Type mapping (mirror of diagrams/dbml_apply._map_type) ───────────────
+# ── Type mapping (mirror of diagrams/dbml_apply._map_type) ───────────────────
 
 _TYPE_ALIASES = {
     "int": "integer", "int4": "integer", "integer": "integer",
@@ -74,7 +74,7 @@ def _map_type(raw: str) -> dict:
     return out
 
 
-# ── Helpers ─────────────────────────────────────────
+# ── Helpers ────────────────────────────────────────────────────────────
 
 def _resolve_table_for_field(session: MCPSession, diagram_id: str,
                              field_id: str) -> str:
@@ -97,15 +97,14 @@ def _active_area_position(session: MCPSession, diagram_id: str) -> Optional[dict
     table lands in that area (membership is geometric)."""
     if not session.active_area_id:
         return None
-    data = session.client.request("GET", f"/diagrams/{diagram_id}/areas/")
-    for a in _as_list(data):
+    for a in _fetch_all(session, f"/diagrams/{diagram_id}/areas/"):
         if str(a.get("id")) == str(session.active_area_id):
             return {"x": float(a.get("x", 0)) + 40.0,
                     "y": float(a.get("y", 0)) + 60.0}
     return None
 
 
-# ── Tables ───────────────────────────────────────────
+# ── Tables ──────────────────────────────────────────────────────────
 
 @mcp.tool()
 def add_table(name: str, schema: str = "", color: str = "",
@@ -158,7 +157,7 @@ def delete_table(table_id: str) -> dict:
     return _run(_impl)
 
 
-# ── Fields ─────────────────────────────────────────
+# ── Fields ──────────────────────────────────────────────────────────
 
 @mcp.tool()
 def add_field(table_id: str, name: str, type: str, opts: Optional[dict] = None) -> dict:
@@ -226,7 +225,7 @@ def delete_field(field_id: str) -> dict:
     return _run(_impl)
 
 
-# ── Relationships ──────────────────────────────────────
+# ── Relationships ──────────────────────────────────────────────────
 
 @mcp.tool()
 def add_relationship(source_table_id: str, source_field_id: str,
@@ -258,6 +257,22 @@ def add_relationship(source_table_id: str, source_field_id: str,
 
 
 @mcp.tool()
+def update_relationship(relationship_id: str, fields: dict) -> dict:
+    """Partially update a relationship. ``fields`` may include name,
+    source_cardinality, target_cardinality, source_table, target_table,
+    source_field_id, target_field_id. Cardinalities are ``"one"`` or
+    ``"many"``."""
+    def _impl(session: MCPSession) -> dict:
+        did = _require_active_diagram(session)
+        updated = session.client.request(
+            "PATCH",
+            f"/diagrams/{did}/relationships/{relationship_id}/", json=fields)
+        return {"updated_relationship": {"id": updated["id"],
+                                         "name": updated.get("name")}}
+    return _run(_impl)
+
+
+@mcp.tool()
 def delete_relationship(relationship_id: str) -> dict:
     """Delete a relationship."""
     def _impl(session: MCPSession) -> dict:
@@ -265,4 +280,64 @@ def delete_relationship(relationship_id: str) -> dict:
         session.client.request(
             "DELETE", f"/diagrams/{did}/relationships/{relationship_id}/")
         return {"deleted_relationship_id": relationship_id}
+    return _run(_impl)
+
+
+# ── Diagram ───────────────────────────────────────────────────────
+
+@mcp.tool()
+def update_diagram(fields: dict) -> dict:
+    """Partially update the active diagram. ``fields`` may include name,
+    description, database_type (e.g. ``"postgresql"``, ``"mysql"``)."""
+    def _impl(session: MCPSession) -> dict:
+        did = _require_active_diagram(session)
+        updated = session.client.request(
+            "PATCH", f"/diagrams/{did}/", json=fields)
+        return {"updated_diagram": {
+            "id": updated["id"],
+            "name": updated.get("name"),
+            "database_type": updated.get("database_type"),
+        }}
+    return _run(_impl)
+
+
+# ── Bulk operations ────────────────────────────────────────────────
+
+@mcp.tool()
+def bulk_update_tables(updates: list) -> dict:
+    """Update many tables in one call. Each entry: ``{"id": str, ...fields}``
+    where the fields are the same set ``update_table`` accepts (name, schema,
+    x, y, width, color, comments, is_view). Use for re-layout: passing 69
+    position updates here is 69× faster than one-by-one and atomic on the
+    client side (each request is still an independent PATCH server-side —
+    if you need true atomicity, use apply_dbml instead).
+
+    Returns ``{"updated": [{id, name}, ...], "failed": [{id, error}, ...]}``
+    so the AI can spot which ones failed without aborting the whole batch."""
+    def _impl(session: MCPSession) -> dict:
+        did = _require_active_diagram(session)
+        updated = []
+        failed = []
+        for entry in (updates or []):
+            try:
+                tid = entry.get("id")
+                if not tid:
+                    failed.append({"id": None, "error": "missing 'id' key"})
+                    continue
+                guard_table_in_scope(session, did, tid)
+                body = {k: v for k, v in entry.items() if k != "id"}
+                if not body:
+                    failed.append({"id": tid, "error": "no fields to update"})
+                    continue
+                res = session.client.request(
+                    "PATCH", f"/diagrams/{did}/tables/{tid}/", json=body)
+                updated.append({"id": res["id"], "name": res.get("name")})
+            except MCPError as exc:
+                failed.append({"id": entry.get("id"),
+                               "error": f"{exc.code}: {exc.message}"})
+            except Exception as exc:
+                failed.append({"id": entry.get("id"),
+                               "error": str(exc)})
+        return {"updated": updated, "failed": failed,
+                "count_ok": len(updated), "count_failed": len(failed)}
     return _run(_impl)
